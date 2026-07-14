@@ -1,0 +1,1 @@
+gbawadutil.exe -in test.wad -cfile ..\source\iwad\test.c
