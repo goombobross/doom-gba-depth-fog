@@ -4,7 +4,7 @@
 A slightly modified version of **[doomhack](https://github.com/doomhack/GBADoom)**'s amazing port of prBoom to the GBA.  
 A pre-compiled shareware rom can be found over at the **[Releases](https://github.com/Kippykip/GBADoom/releases)** tab, while a developer branch can be found as **[in-dev](https://github.com/Kippykip/GBADoom/tree/in-dev)**
 
-It basically adds depth fog and a ton of optimizations to the exsisting fork. Enable fog in options.
+It basically adds depth fog and a ton of optimizations to the exsisting fork. Enable fog in options. use regenerate_prelit_flats.bat for each iwad you want as it is needed for the floor textures!
 
 Be sure to check [doomhack's main branch](https://github.com/doomhack/GBADoom) for future engine optimisations and bug fixes!
 
