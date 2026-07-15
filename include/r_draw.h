@@ -65,6 +65,7 @@ typedef struct {
   unsigned int        step;
   const byte          *source; // start of a 64*64 tile image
   const lighttable_t  *colormap;
+  const byte          *prelit_base; // 16 x 4096-byte ROM variants for this flat
 } draw_span_vars_t;
 
 typedef struct

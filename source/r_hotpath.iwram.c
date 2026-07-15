@@ -67,6 +67,10 @@
 
 #include "gba_functions.h"
 
+#ifdef GBA
+#include "../build/prelit_flats_bin.h"
+#endif
+
 
 //#define static
 
@@ -467,10 +471,10 @@ inline static int R_AdjustLightLevel(int lightlevel)
     return lightlevel + (extralight << LIGHTSEGSHIFT);
 }
 
-inline static const lighttable_t* R_ColourMapAdjusted(int lightlevel, fixed_t scale, boolean depthFog)
+inline static int R_ColourMapNumberAdjusted(int lightlevel, fixed_t scale, boolean depthFog)
 {
     if (fixedcolormap)
-        return fixedcolormap;
+        return (int)((fixedcolormap - fullcolormap) >> 8);
 
     int cm = ((256-lightlevel)>>2) - 24;
 
@@ -494,7 +498,12 @@ inline static const lighttable_t* R_ColourMapAdjusted(int lightlevel, fixed_t sc
     if (depthFog)
         cm &= ~1;
 
-    return fullcolormap + (cm << 8);
+    return cm;
+}
+
+inline static const lighttable_t* R_ColourMapAdjusted(int lightlevel, fixed_t scale, boolean depthFog)
+{
+    return fullcolormap + (R_ColourMapNumberAdjusted(lightlevel, scale, depthFog) << 8);
 }
 
 // General path used by sprites and weapons. Segment/plane loops use the
@@ -1543,19 +1552,13 @@ inline static void R_DrawSpanPixel(unsigned short* dest, const byte* source, con
 
 #ifdef GBA
 /*
- * Cycle-minimal ARM7TDMI span mapper.
+ * Dual-path ARM7TDMI span mapper.
  *
- * Register map:
- *   r2  residual count      r3  VRAM destination
- *   r4  packed position     r5  packed step
- *   r6  flat source         r7  colormap
- *   r8  0x0fc0 mask         r9  16-pixel block counter
- *   r10/r11 paired temporaries
- *
- * The original compiler output used three ALU instructions to form every
- * 64x64 flat index. Keeping 0x0fc0 in r8 folds the shift and mask into one
- * AND-with-shifted-operand, reducing the inner path to the six instructions
- * fundamentally required by the current packed-coordinate format.
+ * Classic lighting keeps the normal source -> colormap -> framebuffer path.
+ * Depth fog uses build-time prelit flat variants and sets colormap to NULL,
+ * selecting a source -> framebuffer path with no dependent lighting lookup.
+ * Both paths use eight-pixel blocks to keep IWRAM use below the previous
+ * heavily unrolled implementation while retaining useful loop amortization.
  */
 __attribute__((naked, noinline))
 static void R_DrawSpan(unsigned int y, unsigned int x1, unsigned int x2,
@@ -1564,16 +1567,18 @@ static void R_DrawSpan(unsigned int y, unsigned int x1, unsigned int x2,
     __asm__ volatile(
         "subs r2, r2, r1\n\t"
         "bxeq lr\n\t"
-        "stmdb sp!, {r4-r11, lr}\n\t"
+        "stmdb sp!, {r4-r10, lr}\n\t"
         "ldmia r3, {r4-r7}\n\t"
-        "ldr r3, 9f\n\t"
+        "ldr r3, 99f\n\t"
         "ldr r3, [r3]\n\t"
         "rsb r0, r0, r0, lsl #4\n\t"
         "add r3, r3, r0, lsl #4\n\t"
         "add r3, r3, r1, lsl #1\n\t"
         "mov r8, #4032\n\t"
-        "mov r9, r2, lsr #4\n\t"
-        "and r2, r2, #15\n\t"
+        "cmp r7, #0\n\t"
+        "beq 20f\n\t"
+        "mov r9, r2, lsr #3\n\t"
+        "and r2, r2, #7\n\t"
         "cmp r9, #0\n\t"
         "beq 2f\n\t"
         "1:\n\t"
@@ -1581,206 +1586,129 @@ static void R_DrawSpan(unsigned int y, unsigned int x1, unsigned int x2,
         "orr r10, r10, r4, lsr #26\n\t"
         "ldrb r10, [r6, r10]\n\t"
         "add r4, r4, r5\n\t"
-        "and r11, r8, r4, lsr #4\n\t"
-        "orr r11, r11, r4, lsr #26\n\t"
-        "ldrb r11, [r6, r11]\n\t"
-        "add r4, r4, r5\n\t"
         "ldrb r10, [r7, r10]\n\t"
-        "ldrb r11, [r7, r11]\n\t"
         "strb r10, [r3], #2\n\t"
-        "strb r11, [r3], #2\n\t"
         "and r10, r8, r4, lsr #4\n\t"
         "orr r10, r10, r4, lsr #26\n\t"
         "ldrb r10, [r6, r10]\n\t"
         "add r4, r4, r5\n\t"
-        "and r11, r8, r4, lsr #4\n\t"
-        "orr r11, r11, r4, lsr #26\n\t"
-        "ldrb r11, [r6, r11]\n\t"
-        "add r4, r4, r5\n\t"
         "ldrb r10, [r7, r10]\n\t"
-        "ldrb r11, [r7, r11]\n\t"
         "strb r10, [r3], #2\n\t"
-        "strb r11, [r3], #2\n\t"
         "and r10, r8, r4, lsr #4\n\t"
         "orr r10, r10, r4, lsr #26\n\t"
         "ldrb r10, [r6, r10]\n\t"
         "add r4, r4, r5\n\t"
-        "and r11, r8, r4, lsr #4\n\t"
-        "orr r11, r11, r4, lsr #26\n\t"
-        "ldrb r11, [r6, r11]\n\t"
-        "add r4, r4, r5\n\t"
         "ldrb r10, [r7, r10]\n\t"
-        "ldrb r11, [r7, r11]\n\t"
         "strb r10, [r3], #2\n\t"
-        "strb r11, [r3], #2\n\t"
         "and r10, r8, r4, lsr #4\n\t"
         "orr r10, r10, r4, lsr #26\n\t"
         "ldrb r10, [r6, r10]\n\t"
         "add r4, r4, r5\n\t"
-        "and r11, r8, r4, lsr #4\n\t"
-        "orr r11, r11, r4, lsr #26\n\t"
-        "ldrb r11, [r6, r11]\n\t"
-        "add r4, r4, r5\n\t"
         "ldrb r10, [r7, r10]\n\t"
-        "ldrb r11, [r7, r11]\n\t"
         "strb r10, [r3], #2\n\t"
-        "strb r11, [r3], #2\n\t"
         "and r10, r8, r4, lsr #4\n\t"
         "orr r10, r10, r4, lsr #26\n\t"
         "ldrb r10, [r6, r10]\n\t"
         "add r4, r4, r5\n\t"
-        "and r11, r8, r4, lsr #4\n\t"
-        "orr r11, r11, r4, lsr #26\n\t"
-        "ldrb r11, [r6, r11]\n\t"
-        "add r4, r4, r5\n\t"
         "ldrb r10, [r7, r10]\n\t"
-        "ldrb r11, [r7, r11]\n\t"
         "strb r10, [r3], #2\n\t"
-        "strb r11, [r3], #2\n\t"
         "and r10, r8, r4, lsr #4\n\t"
         "orr r10, r10, r4, lsr #26\n\t"
         "ldrb r10, [r6, r10]\n\t"
         "add r4, r4, r5\n\t"
-        "and r11, r8, r4, lsr #4\n\t"
-        "orr r11, r11, r4, lsr #26\n\t"
-        "ldrb r11, [r6, r11]\n\t"
-        "add r4, r4, r5\n\t"
         "ldrb r10, [r7, r10]\n\t"
-        "ldrb r11, [r7, r11]\n\t"
         "strb r10, [r3], #2\n\t"
-        "strb r11, [r3], #2\n\t"
         "and r10, r8, r4, lsr #4\n\t"
         "orr r10, r10, r4, lsr #26\n\t"
         "ldrb r10, [r6, r10]\n\t"
         "add r4, r4, r5\n\t"
-        "and r11, r8, r4, lsr #4\n\t"
-        "orr r11, r11, r4, lsr #26\n\t"
-        "ldrb r11, [r6, r11]\n\t"
-        "add r4, r4, r5\n\t"
         "ldrb r10, [r7, r10]\n\t"
-        "ldrb r11, [r7, r11]\n\t"
         "strb r10, [r3], #2\n\t"
-        "strb r11, [r3], #2\n\t"
         "and r10, r8, r4, lsr #4\n\t"
         "orr r10, r10, r4, lsr #26\n\t"
         "ldrb r10, [r6, r10]\n\t"
         "add r4, r4, r5\n\t"
-        "and r11, r8, r4, lsr #4\n\t"
-        "orr r11, r11, r4, lsr #26\n\t"
-        "ldrb r11, [r6, r11]\n\t"
-        "add r4, r4, r5\n\t"
         "ldrb r10, [r7, r10]\n\t"
-        "ldrb r11, [r7, r11]\n\t"
         "strb r10, [r3], #2\n\t"
-        "strb r11, [r3], #2\n\t"
         "subs r9, r9, #1\n\t"
         "bne 1b\n\t"
         "2:\n\t"
-        "tst r2, #8\n\t"
-        "beq 3f\n\t"
-        "and r10, r8, r4, lsr #4\n\t"
-        "orr r10, r10, r4, lsr #26\n\t"
-        "ldrb r10, [r6, r10]\n\t"
-        "add r4, r4, r5\n\t"
-        "and r11, r8, r4, lsr #4\n\t"
-        "orr r11, r11, r4, lsr #26\n\t"
-        "ldrb r11, [r6, r11]\n\t"
-        "add r4, r4, r5\n\t"
-        "ldrb r10, [r7, r10]\n\t"
-        "ldrb r11, [r7, r11]\n\t"
-        "strb r10, [r3], #2\n\t"
-        "strb r11, [r3], #2\n\t"
-        "and r10, r8, r4, lsr #4\n\t"
-        "orr r10, r10, r4, lsr #26\n\t"
-        "ldrb r10, [r6, r10]\n\t"
-        "add r4, r4, r5\n\t"
-        "and r11, r8, r4, lsr #4\n\t"
-        "orr r11, r11, r4, lsr #26\n\t"
-        "ldrb r11, [r6, r11]\n\t"
-        "add r4, r4, r5\n\t"
-        "ldrb r10, [r7, r10]\n\t"
-        "ldrb r11, [r7, r11]\n\t"
-        "strb r10, [r3], #2\n\t"
-        "strb r11, [r3], #2\n\t"
-        "and r10, r8, r4, lsr #4\n\t"
-        "orr r10, r10, r4, lsr #26\n\t"
-        "ldrb r10, [r6, r10]\n\t"
-        "add r4, r4, r5\n\t"
-        "and r11, r8, r4, lsr #4\n\t"
-        "orr r11, r11, r4, lsr #26\n\t"
-        "ldrb r11, [r6, r11]\n\t"
-        "add r4, r4, r5\n\t"
-        "ldrb r10, [r7, r10]\n\t"
-        "ldrb r11, [r7, r11]\n\t"
-        "strb r10, [r3], #2\n\t"
-        "strb r11, [r3], #2\n\t"
-        "and r10, r8, r4, lsr #4\n\t"
-        "orr r10, r10, r4, lsr #26\n\t"
-        "ldrb r10, [r6, r10]\n\t"
-        "add r4, r4, r5\n\t"
-        "and r11, r8, r4, lsr #4\n\t"
-        "orr r11, r11, r4, lsr #26\n\t"
-        "ldrb r11, [r6, r11]\n\t"
-        "add r4, r4, r5\n\t"
-        "ldrb r10, [r7, r10]\n\t"
-        "ldrb r11, [r7, r11]\n\t"
-        "strb r10, [r3], #2\n\t"
-        "strb r11, [r3], #2\n\t"
+        "cmp r2, #0\n\t"
+        "beq 90f\n\t"
         "3:\n\t"
-        "tst r2, #4\n\t"
-        "beq 4f\n\t"
         "and r10, r8, r4, lsr #4\n\t"
         "orr r10, r10, r4, lsr #26\n\t"
         "ldrb r10, [r6, r10]\n\t"
         "add r4, r4, r5\n\t"
-        "and r11, r8, r4, lsr #4\n\t"
-        "orr r11, r11, r4, lsr #26\n\t"
-        "ldrb r11, [r6, r11]\n\t"
-        "add r4, r4, r5\n\t"
         "ldrb r10, [r7, r10]\n\t"
-        "ldrb r11, [r7, r11]\n\t"
         "strb r10, [r3], #2\n\t"
-        "strb r11, [r3], #2\n\t"
+        "subs r2, r2, #1\n\t"
+        "bne 3b\n\t"
+        "b 90f\n\t"
+        "20:\n\t"
+        "mov r9, r2, lsr #3\n\t"
+        "and r2, r2, #7\n\t"
+        "cmp r9, #0\n\t"
+        "beq 22f\n\t"
+        "21:\n\t"
         "and r10, r8, r4, lsr #4\n\t"
         "orr r10, r10, r4, lsr #26\n\t"
         "ldrb r10, [r6, r10]\n\t"
         "add r4, r4, r5\n\t"
-        "and r11, r8, r4, lsr #4\n\t"
-        "orr r11, r11, r4, lsr #26\n\t"
-        "ldrb r11, [r6, r11]\n\t"
-        "add r4, r4, r5\n\t"
-        "ldrb r10, [r7, r10]\n\t"
-        "ldrb r11, [r7, r11]\n\t"
         "strb r10, [r3], #2\n\t"
-        "strb r11, [r3], #2\n\t"
-        "4:\n\t"
-        "tst r2, #2\n\t"
-        "beq 5f\n\t"
         "and r10, r8, r4, lsr #4\n\t"
         "orr r10, r10, r4, lsr #26\n\t"
         "ldrb r10, [r6, r10]\n\t"
         "add r4, r4, r5\n\t"
-        "and r11, r8, r4, lsr #4\n\t"
-        "orr r11, r11, r4, lsr #26\n\t"
-        "ldrb r11, [r6, r11]\n\t"
-        "add r4, r4, r5\n\t"
-        "ldrb r10, [r7, r10]\n\t"
-        "ldrb r11, [r7, r11]\n\t"
         "strb r10, [r3], #2\n\t"
-        "strb r11, [r3], #2\n\t"
-        "5:\n\t"
-        "tst r2, #1\n\t"
-        "beq 6f\n\t"
         "and r10, r8, r4, lsr #4\n\t"
         "orr r10, r10, r4, lsr #26\n\t"
         "ldrb r10, [r6, r10]\n\t"
-        "ldrb r10, [r7, r10]\n\t"
-        "strb r10, [r3]\n\t"
-        "6:\n\t"
-        "ldmia sp!, {r4-r11, lr}\n\t"
+        "add r4, r4, r5\n\t"
+        "strb r10, [r3], #2\n\t"
+        "and r10, r8, r4, lsr #4\n\t"
+        "orr r10, r10, r4, lsr #26\n\t"
+        "ldrb r10, [r6, r10]\n\t"
+        "add r4, r4, r5\n\t"
+        "strb r10, [r3], #2\n\t"
+        "and r10, r8, r4, lsr #4\n\t"
+        "orr r10, r10, r4, lsr #26\n\t"
+        "ldrb r10, [r6, r10]\n\t"
+        "add r4, r4, r5\n\t"
+        "strb r10, [r3], #2\n\t"
+        "and r10, r8, r4, lsr #4\n\t"
+        "orr r10, r10, r4, lsr #26\n\t"
+        "ldrb r10, [r6, r10]\n\t"
+        "add r4, r4, r5\n\t"
+        "strb r10, [r3], #2\n\t"
+        "and r10, r8, r4, lsr #4\n\t"
+        "orr r10, r10, r4, lsr #26\n\t"
+        "ldrb r10, [r6, r10]\n\t"
+        "add r4, r4, r5\n\t"
+        "strb r10, [r3], #2\n\t"
+        "and r10, r8, r4, lsr #4\n\t"
+        "orr r10, r10, r4, lsr #26\n\t"
+        "ldrb r10, [r6, r10]\n\t"
+        "add r4, r4, r5\n\t"
+        "strb r10, [r3], #2\n\t"
+        "subs r9, r9, #1\n\t"
+        "bne 21b\n\t"
+        "22:\n\t"
+        "cmp r2, #0\n\t"
+        "beq 90f\n\t"
+        "23:\n\t"
+        "and r10, r8, r4, lsr #4\n\t"
+        "orr r10, r10, r4, lsr #26\n\t"
+        "ldrb r10, [r6, r10]\n\t"
+        "add r4, r4, r5\n\t"
+        "strb r10, [r3], #2\n\t"
+        "subs r2, r2, #1\n\t"
+        "bne 23b\n\t"
+        "90:\n\t"
+        "ldmia sp!, {r4-r10, lr}\n\t"
         "bx lr\n\t"
         ".align 2\n\t"
-        "9:\n\t"
+        "99:\n\t"
         ".word drawvars\n\t"
     );
 }
@@ -1820,13 +1748,21 @@ static void R_MapPlane(unsigned int y, unsigned int x1, unsigned int x2, draw_sp
 
     dsvars->position = ((xfrac << 10) & 0xffff0000) | ((yfrac >> 6)  & 0x0000ffff);
 
-    // rw_scale is zero in classic mode; depth mode keeps one reciprocal
-    // per visplane and only performs this inexpensive multiply per span.
+    // rw_scale is zero in classic mode. On GBA, depth fog selects one of
+    // sixteen build-time prelit flat copies, eliminating the per-pixel
+    // colormap lookup completely. The fixed 64 KiB per-flat layout makes
+    // both address calculations shifts rather than multiplies.
     if (rw_scale)
     {
         const unsigned int dy2 = (unsigned int)D_abs(((int)y << 1) - (viewheight - 1));
         const int depth = ((unsigned int)rw_scale * dy2) >> FRACBITS;
+#ifdef GBA
+        const unsigned int cm = (unsigned int)R_ColourMapNumberAdjusted(rw_lightlevel, ~depth, true);
+        dsvars->source = dsvars->prelit_base + ((cm >> 1) << 12);
+        dsvars->colormap = NULL; // R_DrawSpan selects the direct prelit path.
+#else
         dsvars->colormap = R_LoadColorMapPointer(R_ColourMapAdjusted(rw_lightlevel, ~depth, true));
+#endif
     }
 
     R_DrawSpan(y, x1, x2, dsvars);
@@ -1900,8 +1836,15 @@ static void R_DoDrawPlane(visplane_t *pl)
         {     // regular flat
 
             draw_span_vars_t dsvars;
+            const unsigned int flatnum = (unsigned int)flattranslation[pl->picnum];
 
-            dsvars.source = W_CacheLumpNum(_g->firstflat + flattranslation[pl->picnum]);
+            dsvars.source = W_CacheLumpNum(_g->firstflat + flatnum);
+#ifdef GBA
+            // Each flat slot owns exactly 64 KiB: 16 shades x 4096 bytes.
+            dsvars.prelit_base = prelit_flats_bin + (flatnum << 16);
+#else
+            dsvars.prelit_base = NULL;
+#endif
             curline = NULL;
             rw_lightlevel = R_AdjustLightLevel(pl->lightlevel);
 
@@ -1910,8 +1853,9 @@ static void R_DoDrawPlane(visplane_t *pl)
             // Classic mode keeps one original map for the whole plane.
             dsvars.colormap = R_LoadColorMapPointer(R_ColourMapAdjusted(rw_lightlevel, 0, false));
 
-            // Zero doubles as the classic-mode sentinel in R_MapPlane.
-            rw_scale = (_g->depthFog && planeheight)
+            // Fixed/inverse maps retain the original path; the ROM bank contains
+            // the sixteen even depth-fog maps only.
+            rw_scale = (_g->depthFog && planeheight && !fixedcolormap)
                 ? R_FastApproxDiv(5*FRACUNIT, planeheight) : 0;
 
             const int stop = pl->maxx + 1;
